@@ -4,6 +4,7 @@ import           Control.Applicative
 import           Control.Monad
 import           Control.Monad.Reader
 import qualified Data.ByteString                 as BS
+import           Data.List.Split
 import           Data.Monoid
 import qualified Data.Vector.Storable               as V
 import           Data.Vector.Storable.ByteString
@@ -12,7 +13,6 @@ import           Foreign.Ptr
 import           Foreign.Storable
 import           Options.Applicative
 import           System.Directory
-import           System.Environment
 
 import           Candide.Core
 import           Vaultaire.Types
@@ -23,6 +23,7 @@ data ReplayOpts = ReplayOpts
     , pgsqlUser    :: String
     , pgsqlPass    :: String
     , oldNamespace :: String
+    , replayOrigin :: Origin
     }
 
 parseReplayOpts :: Parser ReplayOpts
@@ -42,8 +43,11 @@ parseReplayOpts = ReplayOpts
                     (long "pg-pass"
                      <> metavar "PASSWORD")
                 <*> strOption
-                    (short 'o'
+                    (short 'm'
                      <> metavar "OLD_NAMESPACE")
+                <*> option auto
+                    (short 'o'
+                     <> metavar "ORIGIN")
 
 
 data Point = Point { address :: !Word64
@@ -72,14 +76,14 @@ instance Ord Point where
             c  -> c
 
 doAllTheThings :: ReplayOpts -> IO ()
-doAllTheThings (ReplayOpts host port user pass namespace) = do
-    c <- candideConnection host port user pass $ Just $ read "lul"
+doAllTheThings (ReplayOpts host port user pass namespace origin) = do
+    c <- candideConnection host port user pass $ Just origin
     let basePath     = "/var/spool/marquise/" <> namespace
     let pointsPath   = basePath <> "/points/new/"
-    pointsFiles  <- getDirectoryContents pointsPath >>= filterM doesFileExist . fmap (pointsPath <>)
+    fileChunks <- chunksOf 1 <$> (getDirectoryContents pointsPath >>= filterM doesFileExist . fmap (pointsPath <>))
     let coerce (Point addr ts v) = SimplePoint (Address addr) (TimeStamp ts) v
-    forM_ pointsFiles $ \f -> do
-        points <- byteStringToVector <$> BS.readFile f
+    forM_ fileChunks $ \f -> do
+        points <- byteStringToVector <$> BS.concat <$> mapM BS.readFile f
         liftIO $ putStrLn $ "Size: " <> show (V.length points)
         writeManySimple c $ map coerce $ V.toList points
 

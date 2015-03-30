@@ -2,11 +2,15 @@
 
 module Candide.Core where
 
+import Blaze.ByteString.Builder.ByteString
 import           Control.Applicative
 import           Control.Monad
 import           Data.Bifunctor
+import           Data.Bits
+import           Data.Char
 import           Data.Either
 import qualified Data.HashMap.Strict                  as H
+import           Data.Int
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Scientific
@@ -17,28 +21,44 @@ import           Database.PostgreSQL.Simple.FromField
 import           Database.PostgreSQL.Simple.FromRow
 import           Database.PostgreSQL.Simple.HStore
 import           Database.PostgreSQL.Simple.ToField
+import           Database.PostgreSQL.Simple.ToRow
 import           Pipes
 import           Pipes.PostgreSQL.Simple              as PPG
 import qualified Pipes.Prelude                        as P
 
 import           Vaultaire.Types
 
+instance ToField Origin where
+    toField (Origin x) = Plain (fromByteString $ "o_" <> x)
+
+instance ToField Address where
+    toField (Address x) = toField $ x `shift` (-1)
+
+instance ToField TimeStamp where
+    toField (TimeStamp x) = toField x
+
+instance ToRow SimplePoint where
+    toRow (SimplePoint a t v') = let v = fromIntegral v' :: Int64
+                                 in  [ toField a, toField t, toField v]
+
+instance FromField Address where
+    fromField a b = Address <$> fromIntegral <$> (fromField a b :: Conversion Int64)
+
+instance FromField SourceDict where
+    fromField a b = either error id <$> ctvContents <$> fromHStoreList <$> fromField a b
+
 instance FromRow SimplePoint where
     fromRow = do
-        t <- field
         a <- field
+        t <- field
         v <- field
-        return $ SimplePoint (fromIntegral (a :: Integer))
+        return $ SimplePoint (fromIntegral ((a `shift` 1) :: Int64))
                              (fromIntegral (t :: Integer))
                              (fromIntegral (v :: Integer))
 
-instance ToField Origin where
-    toField x = toField $ show x
-
-instance FromField Address where
-    fromField a b = do
-        x <- fromField a b
-        return $ Address $ round (x :: Scientific)
+extendifyAddress :: Address -> Bool -> Address
+extendifyAddress x           False = x
+extendifyAddress (Address x) True  = Address (x `setBit` 0)
 
 ctvContents :: [(Text, Text)] -> Either String SourceDict
 ctvContents pairs = makeSourceDict $ H.fromList pairs
@@ -47,59 +67,59 @@ getContents :: PG.Connection -> Address -> IO (Maybe SourceDict)
 getContents conn (Address addr) = do
     res <- concat <$> PG.query conn "SELECT sourcedict FROM metadata WHERE address = ?" (Only addr)
     case res of
-        [] -> do
-            putStrLn "LOL NO SD"
-            return Nothing
+        [] -> return Nothing
         [sd'] -> case ctvContents (fromHStoreList sd') of
-            Left err -> do
-                putStrLn $ "LOL SHIT WENT DOWN GETTING DAT SD: " <> err
-                return Nothing
+            Left err -> error $ "Error decoding sourcedict: " <> show sd' <> " error: " <> err
             Right sd -> return $ Just sd
-        x -> error "got more than one sourcedict from your address, should not get here"
+        x -> error $ "Got more than one sourcedict from address, should not happen. Got: " <> show x
 
 candideConnection :: String -> Word16 -> String -> String -> Maybe Origin -> IO PG.Connection
-candideConnection host port user pass origin = connect stuff
+candideConnection host port user pass origin = putStrLn database >> connect stuff
   where
-    database = maybe "postgres" (const "foobar") origin
-    stuff = ConnectInfo host port user pass database
+    database  = maybe "postgres" prepare origin
+    stuff     = ConnectInfo host port user pass database
+    prepare x = "o_" <> map toLower (show x)
 
 setupOrigin :: String -> Word16 -> String -> String -> Origin -> IO ()
 setupOrigin host port user pass origin = do
     conn <- candideConnection host port user pass Nothing
-    void $ execute_ conn "CREATE DATABASE FOOBAR WITH ENCODING 'UTF8'"-- (Only origin)
-    putStrLn "DID THE EXECUTE THING"
+    void $ execute conn "CREATE DATABASE ? WITH ENCODING 'UTF8'" (Only origin)
     conn' <- candideConnection host port user pass (Just origin)
-    putStrLn "made the NEW CONNECTION"
     void $ execute_ conn' "CREATE EXTENSION IF NOT EXISTS hstore"
     begin conn'
-    void $ execute_ conn' "CREATE TABLE data (timestamp numeric, address numeric, value numeric)"
-    void $ execute_ conn' "CREATE TABLE metadata (address numeric, sourcedict hstore)"
+    void $ execute_ conn' "CREATE TABLE simple   (address bigint, timestamp bigint, value bigint,   CONSTRAINT simple_addr_ts   PRIMARY KEY(address, timestamp))"
+    void $ execute_ conn' "CREATE TABLE extended (address bigint, timestamp bigint, value bytea,    CONSTRAINT extended_addr_ts PRIMARY KEY(address, timestamp))"
+    void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore, extended bool, CONSTRAINT metadata_addr    PRIMARY KEY(address))"
+    void $ execute_ conn' $ "CREATE OR REPLACE RULE simple_ignore_duplicate_inserts AS ON INSERT TO simple " <>
+                            "WHERE (EXISTS (SELECT 1 FROM simple WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
+                            "DO INSTEAD NOTHING"
     commit conn'
 
 writeContents :: PG.Connection
               -> Address
               -> [(Text, Text)]
               -> IO ()
-writeContents conn (Address addr) sd =
+writeContents conn addr sd =
     void $ PG.execute conn "INSERT INTO metadata VALUES (?, ?)" (addr, HStoreList sd)
 
 writeSimple :: PG.Connection
             -> SimplePoint
             -> IO ()
-writeSimple conn (SimplePoint (Address addr) (TimeStamp ts) v) =
-    void $ PG.execute conn "INSERT INTO data VALUES (?,?,?)" (ts, addr, v)
+writeSimple conn p =
+    void $ PG.execute conn "INSERT INTO simple VALUES (?,?,?)" p
 
 writeManySimple :: PG.Connection
                 -> [SimplePoint]
                 -> IO ()
-writeManySimple conn ps' =
-    let ps = map (\(SimplePoint (Address addr) (TimeStamp ts) v) -> (ts, addr, v)) ps'
-    in void $ PG.executeMany conn "INSERT INTO data VALUES (?,?,?)" ps
+writeManySimple conn ps =
+    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" ps
 
 enumerateOrigin :: PG.Connection
                 -> Producer (Address, SourceDict) IO ()
 enumerateOrigin conn =
-    PPG.query_ conn "SELECT address,sourcedict FROM metadata" >-> P.map (second $ either error id . ctvContents . fromHStoreList)
+    PPG.query_ conn "SELECT * FROM metadata" >-> P.map convert
+  where
+    convert (addr, sd, extended) = (extendifyAddress addr extended, sd)
 
 readSimple :: PG.Connection
            -> Address

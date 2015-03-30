@@ -19,6 +19,7 @@ library
   exposed-modules:     Candide.Core
   build-depends:       base >=4.7 && <4.8
                      , bifunctors
+                     , blaze-builder
                      , vaultaire-common
                      , pipes
                      , pipes-postgresql-simple
