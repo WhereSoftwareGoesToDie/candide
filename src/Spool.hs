@@ -80,7 +80,7 @@ doAllTheThings (ReplayOpts host port user pass namespace origin) = do
     c <- candideConnection host port user pass $ Just origin
     let basePath     = "/var/spool/marquise/" <> namespace
     let pointsPath   = basePath <> "/points/new/"
-    fileChunks <- chunksOf 1 <$> (getDirectoryContents pointsPath >>= filterM doesFileExist . fmap (pointsPath <>))
+    fileChunks <- chunksOf 16 <$> (getDirectoryContents pointsPath >>= filterM doesFileExist . fmap (pointsPath <>))
     let coerce (Point addr ts v) = SimplePoint (Address addr) (TimeStamp ts) v
     forM_ fileChunks $ \f -> do
         points <- byteStringToVector <$> BS.concat <$> mapM BS.readFile f

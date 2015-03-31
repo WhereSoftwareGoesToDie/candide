@@ -38,7 +38,7 @@ instance ToField TimeStamp where
     toField (TimeStamp x) = toField x
 
 instance ToRow SimplePoint where
-    toRow (SimplePoint a t v') = let v = fromIntegral v' :: Int64
+    toRow (SimplePoint a t v') = let v = prepareWord v'
                                  in  [ toField a, toField t, toField v]
 
 instance FromField Address where
@@ -52,9 +52,18 @@ instance FromRow SimplePoint where
         a <- field
         t <- field
         v <- field
-        return $ SimplePoint (fromIntegral ((a `shift` 1) :: Int64))
-                             (fromIntegral (t :: Integer))
-                             (fromIntegral (v :: Integer))
+        return $ SimplePoint (Address $ returnToWord a `shift` 1)
+                             (TimeStamp $ returnToWord t)
+                             (returnToWord v)
+
+-- Postgres only has signed integers
+-- We define some renamed fromIntegral calls to get around this
+
+prepareWord :: Word64 -> Int64
+prepareWord = fromIntegral
+
+returnToWord :: Int64 -> Word64
+returnToWord = fromIntegral
 
 extendifyAddress :: Address -> Bool -> Address
 extendifyAddress x           False = x
@@ -92,6 +101,9 @@ setupOrigin host port user pass origin = do
     void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore, extended bool, CONSTRAINT metadata_addr    PRIMARY KEY(address))"
     void $ execute_ conn' $ "CREATE OR REPLACE RULE simple_ignore_duplicate_inserts AS ON INSERT TO simple " <>
                             "WHERE (EXISTS (SELECT 1 FROM simple WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
+                            "DO INSTEAD NOTHING"
+    void $ execute_ conn' $ "CREATE OR REPLACE RULE extended_ignore_duplicate_inserts AS ON INSERT TO extended " <>
+                            "WHERE (EXISTS (SELECT 1 FROM extended WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
                             "DO INSTEAD NOTHING"
     commit conn'
 
