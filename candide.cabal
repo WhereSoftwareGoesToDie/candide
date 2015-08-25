@@ -17,17 +17,31 @@ source-repository head
 
 library
   exposed-modules:     Candide.Core
+                       Candide.Generators
+                       Candide.Server
   build-depends:       base >=4.7 && <4.8
+                     , async
+                     , attoparsec
                      , bifunctors
                      , blaze-builder
-                     , vaultaire-common
+                     , bytestring
+                     , hslogger
+                     , lifted-async
+                     , mtl
+                     , packer
                      , pipes
+                     , pipes-attoparsec
+                     , pipes-bytestring
+                     , pipes-group
                      , pipes-postgresql-simple
                      , postgresql-simple
+                     , QuickCheck
                      , scientific
                      , text
+                     , time
                      , unordered-containers
-
+                     , marquise
+                     , vaultaire-common
 
   hs-source-dirs:      lib
   default-language:    Haskell2010
@@ -50,10 +64,7 @@ executable candide-from-spool
                        vector,
                        optparse-applicative >= 0.11.0,
                        unordered-containers,
-                       ceilometer-common,
-                       chevalier-common,
-                       vaultaire-common,
-                       vaultaire-query
+                       vaultaire-common
   hs-source-dirs:      src
   ghc-options:         -Wall
                        -O2

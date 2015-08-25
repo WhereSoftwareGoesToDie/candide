@@ -2,7 +2,7 @@
 
 module Candide.Core where
 
-import Blaze.ByteString.Builder.ByteString
+import           Blaze.ByteString.Builder.ByteString
 import           Control.Applicative
 import           Control.Monad
 import           Data.Bifunctor
