@@ -25,6 +25,7 @@ library
                      , bifunctors
                      , blaze-builder
                      , bytestring
+                     , containers
                      , hslogger
                      , lifted-async
                      , mtl
@@ -46,25 +47,56 @@ library
   hs-source-dirs:      lib
   default-language:    Haskell2010
 
+executable candide-create-origin
+  main-is:             CreateOrigin.hs
+  build-depends:       base >=4.7 && <4.8
+                     , bytestring
+                     , optparse-applicative >= 0.11.0
+                     , vaultaire-common
+                     , candide
+
+  hs-source-dirs:      src
+  ghc-options:         -Wall
+                       -O2
+                       -threaded
+  default-language:    Haskell2010
+
+executable candided
+  main-is:             CandideDaemon.hs
+  build-depends:       base >=4.7 && <4.8
+                     , async
+                     , bytestring
+                     , directory
+                     , hslogger
+                     , optparse-applicative >= 0.11.0
+                     , vaultaire-common
+                     , candide
+
+  hs-source-dirs:      src
+  ghc-options:         -Wall
+                       -O2
+                       -threaded
+  default-language:    Haskell2010
+
 executable candide-from-spool
   main-is:             Spool.hs
-  build-depends:       base >=4.7 && <4.8,
-                       aeson,
-                       bytestring,
-                       candide,
-                       containers,
-                       directory,
-                       mtl,
-                       network-uri,
-                       pipes,
-                       pipes-safe,
-                       spool,
-                       split,
-                       text,
-                       vector,
-                       optparse-applicative >= 0.11.0,
-                       unordered-containers,
-                       vaultaire-common
+  build-depends:       base >=4.7 && <4.8
+                     , aeson
+                     , bytestring
+                     , candide
+                     , containers
+                     , directory
+                     , mtl
+                     , network-uri
+                     , pipes
+                     , pipes-safe
+                     , spool
+                     , split
+                     , text
+                     , vector
+                     , optparse-applicative >= 0.11.0
+                     , unordered-containers
+                     , vaultaire-common
   hs-source-dirs:      src
   ghc-options:         -Wall
                        -O2

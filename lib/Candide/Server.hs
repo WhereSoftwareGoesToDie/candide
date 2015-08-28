@@ -18,12 +18,14 @@ import           Data.ByteString                 (ByteString)
 import qualified Data.ByteString                 as BS
 import           Data.ByteString.Builder         (Builder, byteString,
                                                   toLazyByteString)
-import qualified Data.ByteString.Char8           as S
+import qualified Data.ByteString.Char8           as BSC
 import qualified Data.ByteString.Lazy            as L
 import qualified Data.HashMap.Strict             as H
+import           Data.List
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Packer
+import qualified Data.Set                        as S
 import           Data.Time.Clock
 import           Data.Word
 import           Database.PostgreSQL.Simple      as PG
@@ -50,7 +52,7 @@ runCandideDaemon :: String -> Word16 -> String -> String -> Origin -> String -> 
 runCandideDaemon host port user pass origin namespace shutdown cache_file cache_flush_period = async $ do
     infoM "Server.runCandideDaemon" $ "Reading SourceDict cache from " ++ cache_file
     init_cache <- withFile cache_file ReadWriteMode $ \h -> do
-        result <- fromWire <$> S.hGetContents h
+        result <- fromWire <$> BSC.hGetContents h
         case result of
             Left e -> do
                 warningM "Server.runCandideDaemon" $
@@ -104,7 +106,7 @@ sendPoints conn sn shutdown = do
     unless done (sendPoints conn sn shutdown)
   where
     sendChunk chunk = liftIO $ do
-        let size = show . S.length $ chunk
+        let size = show . BSC.length $ chunk
         debugM "Server.sendPoints" $ "Sending chunk of " ++ size ++ " bytes."
         let points = P.toList $ yield (SimpleBurst chunk) >-> decodeSimple
         writeManySimple conn points
@@ -127,10 +129,11 @@ sendContents conn sn initial cache_file cache_flush_period flush_time shutdown =
                         , show $ sizeOfSourceCache initial
                         , " cached sources."
                         ]
-
-                ((), final') <- runEffect $
-                    for (P.runStateP initial (parseContentsRequests bytes >-> filterSeen))
-                        (liftIO . sendSourceDictUpdate conn)
+                reqs <- parseContentsRequests bytes
+                notSeen <- filterSeen reqs initial
+                newHashes <- S.unions <$> forM notSeen (return . S.singleton . hashRequest)
+                let final' = S.foldl (flip insertSourceCache) initial newHashes
+                sendSourceDictUpdate conn notSeen
 
                 newFlushTime' <- do
                   debugM "Server.sendContents" "Contents transmission complete, cleaning up."
@@ -145,7 +148,7 @@ sendContents conn sn initial cache_file cache_flush_period flush_time shutdown =
                   if currTime > flush_time
                       then do
                           debugM "Server.setContents" "Performing periodic cache writeout."
-                          S.writeFile cache_file $ toWire final'
+                          BSC.writeFile cache_file $ toWire final'
                           return $ addUTCTime (fromInteger cache_flush_period) currTime
                       else do
                           debugM "Server.sendContents" $ concat ["Next cache flush at ", show flush_time, "."]
@@ -163,21 +166,21 @@ sendContents conn sn initial cache_file cache_flush_period flush_time shutdown =
         else sendContents conn sn final cache_file cache_flush_period newFlushTime shutdown
 
   where
-    filterSeen = forever $ do
-        req@(ContentsRequest addr sd) <- await
-        cache <- get
-        let currHash = hashSource sd
-        if memberSourceCache currHash cache then
+    hashRequest (ContentsRequest _ sd) = hashSource sd
+    seen cache req = memberSourceCache (hashRequest req) cache
+    filterSeen reqs cache = do
+        let (prevSeen, notSeen) = partition (seen cache) reqs
+        forM_ prevSeen $ \(ContentsRequest addr _) ->
             liftIO $ debugM "Server.filterSeen" $ "Seen source dict with address " ++ show addr ++ " before, ignoring."
-        else do
-            put (insertSourceCache currHash cache)
-            yield req
-    sendSourceDictUpdate conn (ContentsRequest addr (SourceDict sd)) = do
-        liftIO (debugM "Server.sendContents" $ "Sending contents update for " ++ show addr)
-        writeContents conn addr (H.toList sd)
+        return notSeen
+    sendSourceDictUpdate conn reqs = do
+        forM_ reqs $ \(ContentsRequest addr _) ->
+            liftIO (debugM "Server.sendContents" $ "Sending contents update for " ++ show addr)
+        writeManyContents conn $ map reqToTuple reqs
+    reqToTuple (ContentsRequest addr (SourceDict sd)) = (addr, H.toList sd)
 
-parseContentsRequests :: Monad m => L.ByteString -> Producer ContentsRequest m ()
-parseContentsRequests bs =
+parseContentsRequests :: Monad m => L.ByteString -> m [ContentsRequest]
+parseContentsRequests bs = P.toListM $
     parsed parseContentsRequest (PB.fromLazy bs)
     >>= either (throw . fst) return
 
@@ -193,7 +196,7 @@ parseContentsRequest = do
 idleTime :: Int
 idleTime = 1000000 -- 1 second
 
-breakInToChunks :: Monad m => L.ByteString -> Producer S.ByteString m ()
+breakInToChunks :: Monad m => L.ByteString -> Producer BSC.ByteString m ()
 breakInToChunks bs =
     chunkBuilder (parsed parsePoint (PB.fromLazy bs))
     >>= either (throw . fst) return
@@ -204,7 +207,7 @@ breakInToChunks bs =
 -- This could be done with explicit recursion and next, but, then we would not
 -- get to apply a fold over a FreeT stack of producers. This is almost
 -- generalizable, at a stretch.
-chunkBuilder :: Monad m => Producer (Int, Builder) m r -> Producer S.ByteString m r
+chunkBuilder :: Monad m => Producer (Int, Builder) m r -> Producer BSC.ByteString m r
 chunkBuilder = PG.folds (<>) mempty (L.toStrict . toLazyByteString)
              -- Fold over each producer of counted Builders, turning it into
              -- a contigous strict ByteString ready for transmission.
@@ -276,7 +279,7 @@ parsePoint = do
             return (24, byteString packet)
 
 -- Return the size of the extended segment, if the point is an extended one.
-extendedSize :: S.ByteString -> Maybe Int
+extendedSize :: BSC.ByteString -> Maybe Int
 extendedSize packet = flip runUnpacking packet $ do
     addr <- Address <$> getWord64LE
     if isAddressExtended addr

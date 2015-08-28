@@ -11,6 +11,7 @@ import           Data.Char
 import           Data.Either
 import qualified Data.HashMap.Strict                  as H
 import           Data.Int
+import           Data.List
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Scientific
@@ -65,10 +66,6 @@ prepareWord = fromIntegral
 returnToWord :: Int64 -> Word64
 returnToWord = fromIntegral
 
-extendifyAddress :: Address -> Bool -> Address
-extendifyAddress x           False = x
-extendifyAddress (Address x) True  = Address (x `setBit` 0)
-
 ctvContents :: [(Text, Text)] -> Either String SourceDict
 ctvContents pairs = makeSourceDict $ H.fromList pairs
 
@@ -97,14 +94,13 @@ setupOrigin host port user pass origin = do
     void $ execute_ conn' "CREATE EXTENSION IF NOT EXISTS hstore"
     begin conn'
     void $ execute_ conn' "CREATE TABLE simple   (address bigint, timestamp bigint, value bigint,   CONSTRAINT simple_addr_ts   PRIMARY KEY(address, timestamp))"
-    void $ execute_ conn' "CREATE TABLE extended (address bigint, timestamp bigint, value bytea,    CONSTRAINT extended_addr_ts PRIMARY KEY(address, timestamp))"
-    void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore, extended bool, CONSTRAINT metadata_addr    PRIMARY KEY(address))"
+    void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore,                CONSTRAINT metadata_addr    PRIMARY KEY(address))"
     void $ execute_ conn' $ "CREATE OR REPLACE RULE simple_ignore_duplicate_inserts AS ON INSERT TO simple " <>
                             "WHERE (EXISTS (SELECT 1 FROM simple WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
                             "DO INSTEAD NOTHING"
-    void $ execute_ conn' $ "CREATE OR REPLACE RULE extended_ignore_duplicate_inserts AS ON INSERT TO extended " <>
-                            "WHERE (EXISTS (SELECT 1 FROM extended WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
-                            "DO INSTEAD NOTHING"
+    void $ execute_ conn' $ "CREATE OR REPLACE RULE metadata_last_write_wins AS ON INSERT TO metadata " <>
+                            "WHERE (EXISTS (SELECT 1 FROM metadata WHERE address = NEW.address)) " <>
+                            "DO INSTEAD UPDATE metadata SET sourcedict = NEW.sourcedict"
     commit conn'
 
 writeContents :: PG.Connection
@@ -113,6 +109,14 @@ writeContents :: PG.Connection
               -> IO ()
 writeContents conn addr sd =
     void $ PG.execute conn "INSERT INTO metadata VALUES (?, ?)" (addr, HStoreList sd)
+
+writeManyContents :: PG.Connection
+                  -> [(Address, [(Text, Text)])]
+                  -> IO ()
+writeManyContents conn pairs =
+    void $ PG.executeMany conn "INSERT INTO metadata VALUES (?, ?)" $ map (second HStoreList) pairs
+  where
+    isDuplicate (addr, _) (addr', _) = addr == addr'
 
 writeSimple :: PG.Connection
             -> SimplePoint
@@ -124,14 +128,14 @@ writeManySimple :: PG.Connection
                 -> [SimplePoint]
                 -> IO ()
 writeManySimple conn ps =
-    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" ps
+    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" $ nubBy isDuplicate ps
+  where
+    isDuplicate (SimplePoint addr ts _) (SimplePoint addr' ts' _) = addr == addr' && ts == ts'
 
 enumerateOrigin :: PG.Connection
                 -> Producer (Address, SourceDict) IO ()
 enumerateOrigin conn =
-    PPG.query_ conn "SELECT * FROM metadata" >-> P.map convert
-  where
-    convert (addr, sd, extended) = (extendifyAddress addr extended, sd)
+    PPG.query_ conn "SELECT * FROM metadata"
 
 readSimple :: PG.Connection
            -> Address
