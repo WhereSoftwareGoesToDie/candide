@@ -12,6 +12,7 @@ import           Data.Either
 import qualified Data.HashMap.Strict                  as H
 import           Data.Int
 import           Data.List
+import           Data.List.Extra
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Scientific
@@ -95,6 +96,7 @@ setupOrigin host port user pass origin = do
     begin conn'
     void $ execute_ conn' "CREATE TABLE simple   (address bigint, timestamp bigint, value bigint,   CONSTRAINT simple_addr_ts   PRIMARY KEY(address, timestamp))"
     void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore,                CONSTRAINT metadata_addr    PRIMARY KEY(address))"
+    void $ execute_ conn' "CREATE INDEX search_metadata ON metadata USING GIST (sourcedict)"
     void $ execute_ conn' $ "CREATE OR REPLACE RULE simple_ignore_duplicate_inserts AS ON INSERT TO simple " <>
                             "WHERE (EXISTS (SELECT 1 FROM simple WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
                             "DO INSTEAD NOTHING"
@@ -114,9 +116,10 @@ writeManyContents :: PG.Connection
                   -> [(Address, [(Text, Text)])]
                   -> IO ()
 writeManyContents conn pairs =
-    void $ PG.executeMany conn "INSERT INTO metadata VALUES (?, ?)" $ map (second HStoreList) pairs
-  where
-    isDuplicate (addr, _) (addr', _) = addr == addr'
+    void $ PG.executeMany conn "INSERT INTO metadata VALUES (?, ?)" $
+        -- We reverse because nubOrd keeps the first occurence and we want the last
+        map (second HStoreList) $ nubOrdOn fst $ reverse pairs
+
 
 writeSimple :: PG.Connection
             -> SimplePoint
@@ -128,9 +131,9 @@ writeManySimple :: PG.Connection
                 -> [SimplePoint]
                 -> IO ()
 writeManySimple conn ps =
-    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" $ nubBy isDuplicate ps
+    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" $ nubOrdOn addrTs ps
   where
-    isDuplicate (SimplePoint addr ts _) (SimplePoint addr' ts' _) = addr == addr' && ts == ts'
+    addrTs (SimplePoint addr ts _) = (addr, ts)
 
 enumerateOrigin :: PG.Connection
                 -> Producer (Address, SourceDict) IO ()
@@ -142,12 +145,5 @@ readSimple :: PG.Connection
            -> TimeStamp
            -> TimeStamp
            -> Producer SimplePoint IO ()
-readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) = do
-    x <- liftIO $ PG.formatQuery conn "SELECT * FROM data WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
-    liftIO $ print x
-    liftIO $ putStrLn "all da shiz"
-    PPG.query conn "SELECT * FROM data WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
-
-getEverything :: PG.Connection
-              -> Producer (Scientific, Scientific, Scientific) IO ()
-getEverything conn = PPG.query_ conn "SELECT * FROM data"
+readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
+    PPG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)

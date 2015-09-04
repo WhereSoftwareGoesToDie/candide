@@ -26,6 +26,7 @@ library
                      , blaze-builder
                      , bytestring
                      , containers
+                     , extra
                      , hslogger
                      , lifted-async
                      , mtl
