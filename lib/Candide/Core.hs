@@ -24,6 +24,7 @@ import           Database.PostgreSQL.Simple.FromRow
 import           Database.PostgreSQL.Simple.HStore
 import           Database.PostgreSQL.Simple.ToField
 import           Database.PostgreSQL.Simple.ToRow
+import           Database.PostgreSQL.Simple.Types
 import           Pipes
 import           Pipes.PostgreSQL.Simple              as PPG
 import qualified Pipes.Prelude                        as P
@@ -147,3 +148,12 @@ readSimple :: PG.Connection
            -> Producer SimplePoint IO ()
 readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
     PPG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
+
+searchTags :: PG.Connection
+           -> [(Text, Text)]
+           -> Producer (Address, SourceDict) IO ()
+searchTags conn tags = do
+    let (keys, values) = bimap PGArray PGArray $ unzip tags
+    q <- liftIO $ formatQuery conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
+    liftIO $ print q
+    PPG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
