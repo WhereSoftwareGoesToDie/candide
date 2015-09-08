@@ -103,7 +103,7 @@ setupOrigin host port user pass origin = do
                             "DO INSTEAD NOTHING"
     void $ execute_ conn' $ "CREATE OR REPLACE RULE metadata_last_write_wins AS ON INSERT TO metadata " <>
                             "WHERE (EXISTS (SELECT 1 FROM metadata WHERE address = NEW.address)) " <>
-                            "DO INSTEAD UPDATE metadata SET sourcedict = NEW.sourcedict"
+                            "DO INSTEAD UPDATE metadata SET sourcedict = NEW.sourcedict WHERE address = NEW.address"
     commit conn'
 
 writeContents :: PG.Connection
@@ -120,7 +120,6 @@ writeManyContents conn pairs =
     void $ PG.executeMany conn "INSERT INTO metadata VALUES (?, ?)" $
         -- We reverse because nubOrd keeps the first occurence and we want the last
         map (second HStoreList) $ nubOrdOn fst $ reverse pairs
-
 
 writeSimple :: PG.Connection
             -> SimplePoint
@@ -145,15 +144,13 @@ readSimple :: PG.Connection
            -> Address
            -> TimeStamp
            -> TimeStamp
-           -> Producer SimplePoint IO ()
+           -> IO [SimplePoint]
 readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
-    PPG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
+    PG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
 
 searchTags :: PG.Connection
            -> [(Text, Text)]
-           -> Producer (Address, SourceDict) IO ()
+           -> IO [(Address, SourceDict)]
 searchTags conn tags = do
     let (keys, values) = bimap PGArray PGArray $ unzip tags
-    q <- liftIO $ formatQuery conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
-    liftIO $ print q
-    PPG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
+    PG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)

@@ -292,4 +292,4 @@ extendedSize packet = flip runUnpacking packet $ do
 -- A burst should be, at maximum, very close to this size, unless the user
 -- decides to send a very long extended point.
 idealBurstSize :: Int
-idealBurstSize = 16 * 1048576
+idealBurstSize = 1048576
