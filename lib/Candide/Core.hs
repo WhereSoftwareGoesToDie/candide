@@ -82,7 +82,7 @@ getContents conn (Address addr) = do
         x -> error $ "Got more than one sourcedict from address, should not happen. Got: " <> show x
 
 candideConnection :: String -> Word16 -> String -> String -> Maybe Origin -> IO PG.Connection
-candideConnection host port user pass origin = putStrLn database >> connect stuff
+candideConnection host port user pass origin = connect stuff
   where
     database  = maybe "postgres" prepare origin
     stuff     = ConnectInfo host port user pass database
