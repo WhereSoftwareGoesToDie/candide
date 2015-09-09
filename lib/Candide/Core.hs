@@ -2,7 +2,7 @@
 
 module Candide.Core where
 
-import Blaze.ByteString.Builder.ByteString
+import           Blaze.ByteString.Builder.ByteString
 import           Control.Applicative
 import           Control.Monad
 import           Data.Bifunctor
@@ -11,6 +11,8 @@ import           Data.Char
 import           Data.Either
 import qualified Data.HashMap.Strict                  as H
 import           Data.Int
+import           Data.List
+import           Data.List.Extra
 import           Data.Maybe
 import           Data.Monoid
 import           Data.Scientific
@@ -22,6 +24,7 @@ import           Database.PostgreSQL.Simple.FromRow
 import           Database.PostgreSQL.Simple.HStore
 import           Database.PostgreSQL.Simple.ToField
 import           Database.PostgreSQL.Simple.ToRow
+import           Database.PostgreSQL.Simple.Types
 import           Pipes
 import           Pipes.PostgreSQL.Simple              as PPG
 import qualified Pipes.Prelude                        as P
@@ -65,10 +68,6 @@ prepareWord = fromIntegral
 returnToWord :: Int64 -> Word64
 returnToWord = fromIntegral
 
-extendifyAddress :: Address -> Bool -> Address
-extendifyAddress x           False = x
-extendifyAddress (Address x) True  = Address (x `setBit` 0)
-
 ctvContents :: [(Text, Text)] -> Either String SourceDict
 ctvContents pairs = makeSourceDict $ H.fromList pairs
 
@@ -83,7 +82,7 @@ getContents conn (Address addr) = do
         x -> error $ "Got more than one sourcedict from address, should not happen. Got: " <> show x
 
 candideConnection :: String -> Word16 -> String -> String -> Maybe Origin -> IO PG.Connection
-candideConnection host port user pass origin = putStrLn database >> connect stuff
+candideConnection host port user pass origin = connect stuff
   where
     database  = maybe "postgres" prepare origin
     stuff     = ConnectInfo host port user pass database
@@ -97,14 +96,14 @@ setupOrigin host port user pass origin = do
     void $ execute_ conn' "CREATE EXTENSION IF NOT EXISTS hstore"
     begin conn'
     void $ execute_ conn' "CREATE TABLE simple   (address bigint, timestamp bigint, value bigint,   CONSTRAINT simple_addr_ts   PRIMARY KEY(address, timestamp))"
-    void $ execute_ conn' "CREATE TABLE extended (address bigint, timestamp bigint, value bytea,    CONSTRAINT extended_addr_ts PRIMARY KEY(address, timestamp))"
-    void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore, extended bool, CONSTRAINT metadata_addr    PRIMARY KEY(address))"
+    void $ execute_ conn' "CREATE TABLE metadata (address bigint, sourcedict hstore,                CONSTRAINT metadata_addr    PRIMARY KEY(address))"
+    void $ execute_ conn' "CREATE INDEX search_metadata ON metadata USING GIST (sourcedict)"
     void $ execute_ conn' $ "CREATE OR REPLACE RULE simple_ignore_duplicate_inserts AS ON INSERT TO simple " <>
                             "WHERE (EXISTS (SELECT 1 FROM simple WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
                             "DO INSTEAD NOTHING"
-    void $ execute_ conn' $ "CREATE OR REPLACE RULE extended_ignore_duplicate_inserts AS ON INSERT TO extended " <>
-                            "WHERE (EXISTS (SELECT 1 FROM extended WHERE address = NEW.address AND timestamp = NEW.timestamp)) " <>
-                            "DO INSTEAD NOTHING"
+    void $ execute_ conn' $ "CREATE OR REPLACE RULE metadata_last_write_wins AS ON INSERT TO metadata " <>
+                            "WHERE (EXISTS (SELECT 1 FROM metadata WHERE address = NEW.address)) " <>
+                            "DO INSTEAD UPDATE metadata SET sourcedict = NEW.sourcedict WHERE address = NEW.address"
     commit conn'
 
 writeContents :: PG.Connection
@@ -113,6 +112,14 @@ writeContents :: PG.Connection
               -> IO ()
 writeContents conn addr sd =
     void $ PG.execute conn "INSERT INTO metadata VALUES (?, ?)" (addr, HStoreList sd)
+
+writeManyContents :: PG.Connection
+                  -> [(Address, [(Text, Text)])]
+                  -> IO ()
+writeManyContents conn pairs =
+    void $ PG.executeMany conn "INSERT INTO metadata VALUES (?, ?)" $
+        -- We reverse because nubOrd keeps the first occurence and we want the last
+        map (second HStoreList) $ nubOrdOn fst $ reverse pairs
 
 writeSimple :: PG.Connection
             -> SimplePoint
@@ -124,26 +131,26 @@ writeManySimple :: PG.Connection
                 -> [SimplePoint]
                 -> IO ()
 writeManySimple conn ps =
-    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" ps
+    void $ PG.executeMany conn "INSERT INTO simple VALUES (?,?,?)" $ nubOrdOn addrTs ps
+  where
+    addrTs (SimplePoint addr ts _) = (addr, ts)
 
 enumerateOrigin :: PG.Connection
                 -> Producer (Address, SourceDict) IO ()
 enumerateOrigin conn =
-    PPG.query_ conn "SELECT * FROM metadata" >-> P.map convert
-  where
-    convert (addr, sd, extended) = (extendifyAddress addr extended, sd)
+    PPG.query_ conn "SELECT * FROM metadata"
 
 readSimple :: PG.Connection
            -> Address
            -> TimeStamp
            -> TimeStamp
-           -> Producer SimplePoint IO ()
-readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) = do
-    x <- liftIO $ PG.formatQuery conn "SELECT * FROM data WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
-    liftIO $ print x
-    liftIO $ putStrLn "all da shiz"
-    PPG.query conn "SELECT * FROM data WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
+           -> IO [SimplePoint]
+readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
+    PG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
 
-getEverything :: PG.Connection
-              -> Producer (Scientific, Scientific, Scientific) IO ()
-getEverything conn = PPG.query_ conn "SELECT * FROM data"
+searchTags :: PG.Connection
+           -> [(Text, Text)]
+           -> IO [(Address, SourceDict)]
+searchTags conn tags = do
+    let (keys, values) = bimap PGArray PGArray $ unzip tags
+    PG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)

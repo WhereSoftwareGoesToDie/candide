@@ -6,7 +6,7 @@ import           Control.Monad.Reader
 import qualified Data.ByteString                 as BS
 import           Data.List.Split
 import           Data.Monoid
-import qualified Data.Vector.Storable               as V
+import qualified Data.Vector.Storable            as V
 import           Data.Vector.Storable.ByteString
 import           Data.Word
 import           Foreign.Ptr
