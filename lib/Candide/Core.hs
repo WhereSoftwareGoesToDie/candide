@@ -146,7 +146,7 @@ readSimple :: PG.Connection
            -> TimeStamp
            -> IO [SimplePoint]
 readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
-    PG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ?" (addr, s, e)
+    PG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ? ORDER BY timestamp" (addr, s, e)
 
 searchTags :: PG.Connection
            -> [(Text, Text)]
