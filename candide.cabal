@@ -1,5 +1,5 @@
 name:                candide
-version:             0.1.0.0
+version:             0.2.0.0
 synopsis:            toy postgres datastore
 description:         toy postgres datastore
 license:             BSD3
@@ -19,7 +19,7 @@ library
   exposed-modules:     Candide.Core
                        Candide.Generators
                        Candide.Server
-  build-depends:       base >=4.7 && <4.8
+  build-depends:       base >=4.7 && < 5
                      , async
                      , attoparsec
                      , bifunctors
@@ -50,7 +50,7 @@ library
 
 executable candide-create-origin
   main-is:             CreateOrigin.hs
-  build-depends:       base >=4.7 && <4.8
+  build-depends:       base >=4.7 && < 5
                      , bytestring
                      , optparse-applicative >= 0.11.0
                      , vaultaire-common
@@ -64,7 +64,7 @@ executable candide-create-origin
 
 executable candided
   main-is:             CandideDaemon.hs
-  build-depends:       base >=4.7 && <4.8
+  build-depends:       base >=4.7 && < 5
                      , async
                      , bytestring
                      , directory
@@ -81,7 +81,7 @@ executable candided
 
 executable candide-from-spool
   main-is:             Spool.hs
-  build-depends:       base >=4.7 && <4.8
+  build-depends:       base >=4.7 && < 5
                      , aeson
                      , bytestring
                      , candide
