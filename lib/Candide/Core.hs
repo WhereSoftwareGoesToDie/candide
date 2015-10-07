@@ -140,17 +140,19 @@ enumerateOrigin :: PG.Connection
 enumerateOrigin conn =
     PPG.query_ conn "SELECT * FROM metadata"
 
-readSimple :: PG.Connection
+readSimple :: MonadIO m
+           => PG.Connection
            -> Address
            -> TimeStamp
            -> TimeStamp
-           -> IO [SimplePoint]
+           -> Producer SimplePoint m ()
 readSimple conn (Address addr) (TimeStamp s) (TimeStamp e) =
-    PG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ? ORDER BY timestamp" (addr, s, e)
+    PPG.query conn "SELECT * FROM simple WHERE address = ? AND timestamp BETWEEN ? AND ? ORDER BY timestamp" (addr, s, e)
 
-searchTags :: PG.Connection
+searchTags :: MonadIO m
+           => PG.Connection
            -> [(Text, Text)]
-           -> IO [(Address, SourceDict)]
+           -> Producer (Address, SourceDict) m ()
 searchTags conn tags = do
     let (keys, values) = bimap PGArray PGArray $ unzip tags
-    PG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
+    PPG.query conn "SELECT * FROM metadata WHERE sourcedict -> ? = ?" (keys, values)
